@@ -1155,6 +1155,7 @@ mod tests {
             mac: MacAddress::from_str("AA:BB:CC:DD:EE:FF").unwrap(),
         };
         let event_context = EventContext {
+            platform: Default::default(),
             endpoint_key: "aa:bb:cc:dd:ee:ff".to_string(),
             addr,
             collector_type: NVUE_GNMI_SAMPLE_STREAM_ID,
@@ -1219,6 +1220,7 @@ mod tests {
         let proc = GnmiSampleProcessor {
             data_sink: Some(sink.clone()),
             event_context: EventContext {
+                platform: Default::default(),
                 endpoint_key: "aa:bb:cc:dd:ee:ff".to_string(),
                 addr: BmcAddr {
                     ip: "10.0.0.1".parse().unwrap(),

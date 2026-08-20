@@ -26,6 +26,7 @@ use carbide_uuid::nvlink::NvLinkDomainId;
 use carbide_uuid::power_shelf::PowerShelfId;
 use carbide_uuid::rack::RackId;
 use carbide_uuid::switch::SwitchId;
+use hw_platform::HwType;
 use mac_address::MacAddress;
 use tokio::sync::OnceCell;
 use url::Url;
@@ -54,6 +55,14 @@ impl SharedSystemUuid {
         self.0.get().copied().flatten()
     }
 
+    /// True once resolution has run, whether or not it found a UUID.
+    ///
+    /// [`get`](Self::get) cannot answer this: it returns `None` both for "not
+    /// yet asked" and for "asked, and this BMC reports no UUID".
+    pub(crate) fn initialized(&self) -> bool {
+        self.0.initialized()
+    }
+
     pub(crate) async fn get_or_try_init<E, F, Fut>(&self, f: F) -> Result<Option<uuid::Uuid>, E>
     where
         F: FnOnce() -> Fut,
@@ -72,6 +81,82 @@ impl From<Option<uuid::Uuid>> for SharedSystemUuid {
     }
 }
 
+/// What a BMC reports about the hardware it manages.
+///
+/// The raw `vendor` and `product` strings are kept beside the classified
+/// `hw_type` rather than discarded once classification succeeds. A platform
+/// that reaches the fleet before its classifier arm does still emits events,
+/// and those events stay identifiable: `hw_type` is absent, but the raw pair
+/// names the hardware, so triage works and a downstream rule can be written
+/// against it without waiting for a hw-health release. With only `hw_type`, an
+/// unrecognized platform would be indistinguishable from an unreachable BMC.
+///
+/// A fully empty value is a real outcome -- the BMC answered and identified
+/// nothing -- and is distinct from the unresolved state that [`SharedPlatform`]
+/// represents with an uninitialized cell.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BmcPlatform {
+    /// The classified platform, absent when no classifier arm matched.
+    pub hw_type: Option<HwType>,
+    /// `ServiceRoot.Vendor`, trimmed; absent when empty or unreported.
+    pub vendor: Option<String>,
+    /// `ServiceRoot.Product`, trimmed; absent when empty or unreported.
+    pub product: Option<String>,
+}
+
+impl BmcPlatform {
+    /// True when the BMC identified itself in no way at all.
+    ///
+    /// Publishing reads the three fields individually -- a platform that
+    /// reported only a vendor still publishes that vendor -- so this is not a
+    /// gate on emission. It names the "answered, and said nothing" outcome,
+    /// which is what distinguishes a resolved-but-empty cell from an
+    /// unresolved one.
+    pub fn is_empty(&self) -> bool {
+        self.hw_type.is_none() && self.vendor.is_none() && self.product.is_none()
+    }
+}
+
+/// Shared, write-once hardware platform for one BMC endpoint.
+///
+/// The same shape and the same reasoning as [`SharedSystemUuid`]: collectors
+/// clone endpoint state when they start and a streaming collector keeps that
+/// clone for the life of its stream, so a platform resolved after collector
+/// startup only reaches emitted events through shared state.
+///
+/// This lives on [`BmcEndpoint`] rather than in [`MachineData`] because it is
+/// not machine-specific. Switch BMCs emit Redfish events too, and the taxonomy
+/// has switch and power-shelf variants; hanging it off machine metadata would
+/// silently drop every non-machine endpoint.
+#[derive(Clone, Debug, Default)]
+pub struct SharedPlatform(Arc<OnceCell<BmcPlatform>>);
+
+impl PartialEq for SharedPlatform {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+            || matches!((self.0.get(), other.0.get()), (Some(left), Some(right)) if left == right)
+    }
+}
+
+impl SharedPlatform {
+    pub fn get(&self) -> Option<&BmcPlatform> {
+        self.0.get()
+    }
+
+    /// True once resolution has run, whether or not it identified anything.
+    pub(crate) fn initialized(&self) -> bool {
+        self.0.initialized()
+    }
+
+    pub(crate) async fn get_or_try_init<E, F, Fut>(&self, f: F) -> Result<&BmcPlatform, E>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<BmcPlatform, E>>,
+    {
+        self.0.get_or_try_init(f).await
+    }
+}
+
 #[derive(Clone)]
 pub struct BmcEndpoint {
     pub addr: BmcAddr,
@@ -79,6 +164,13 @@ pub struct BmcEndpoint {
     pub rack_id: Option<RackId>,
     pub labels: BTreeMap<String, String>,
     pub bmc: Arc<BmcClient>,
+
+    /// Hardware platform reported by this BMC, resolved on demand by discovery.
+    ///
+    /// Shared write-once state so a platform resolved after collectors start
+    /// still reaches their emitted events, and so both a present and an absent
+    /// result are cached and the BMC is queried only once.
+    pub platform: SharedPlatform,
 }
 
 impl BmcEndpoint {
@@ -105,6 +197,18 @@ impl BmcEndpoint {
             Some(EndpointMetadata::Switch(switch)) => Cow::Borrowed(&switch.serial),
             _ => Cow::Owned(self.addr.mac.to_string()),
         }
+    }
+
+    /// Returns whether this endpoint speaks Redfish at all.
+    ///
+    /// Every endpoint kind does except the switch *host* side, which is reached
+    /// over NVUE/gNMI and exposes no Redfish service. Probing it would spend a
+    /// connection attempt and a warning per discovery pass to learn nothing.
+    pub(crate) fn supports_redfish(&self) -> bool {
+        !matches!(
+            self.metadata.as_ref(),
+            Some(EndpointMetadata::Switch(switch)) if switch.endpoint_role == SwitchEndpointRole::Host
+        )
     }
 
     /// Returns whether this endpoint supports periodic Redfish log collection.
@@ -309,8 +413,8 @@ mod tests {
     use mac_address::MacAddress;
 
     use super::{
-        BmcAddr, BmcCredentials, EndpointMetadata, MachineData, PowerShelfData, SharedSystemUuid,
-        SwitchData, SwitchEndpointRole,
+        BmcAddr, BmcCredentials, BmcPlatform, EndpointMetadata, MachineData, PowerShelfData,
+        SharedPlatform, SharedSystemUuid, SwitchData, SwitchEndpointRole,
     };
     use crate::endpoint::test_support::{endpoint_with_creds, mac, test_endpoint};
 
@@ -426,6 +530,104 @@ mod tests {
                 endpoint.supports_periodic_logs()
             },
         );
+    }
+
+    // Identity resolution probes Redfish, so it has to skip the one endpoint
+    // kind that has none. Every other kind emits Redfish events and needs a
+    // platform -- the taxonomy has switch and power-shelf variants.
+    #[test]
+    fn redfish_probing_covers_every_endpoint_kind_except_the_switch_host() {
+        let switch_bmc = SwitchData {
+            id: None,
+            serial: "switch".to_string(),
+            slot_number: Some(1),
+            tray_index: Some(2),
+            nvlink_domain_uuid: None,
+            endpoint_role: SwitchEndpointRole::Bmc,
+            is_primary: true,
+            nmxc_enabled: false,
+            nmxt_enabled: false,
+        };
+
+        let switch_host = SwitchData {
+            endpoint_role: SwitchEndpointRole::Host,
+            ..switch_bmc.clone()
+        };
+
+        check_values(
+            [
+                Check {
+                    scenario: "machine BMC speaks Redfish",
+                    input: Some(EndpointMetadata::Machine(MachineData {
+                        machine_id: None,
+                        machine_serial: None,
+                        system_uuid: SharedSystemUuid::default(),
+                        slot_number: None,
+                        tray_index: None,
+                        nvlink_domain_uuid: None,
+                        driver_version: None,
+                    })),
+                    expect: true,
+                },
+                Check {
+                    scenario: "switch BMC speaks Redfish",
+                    input: Some(EndpointMetadata::Switch(switch_bmc)),
+                    expect: true,
+                },
+                // NVUE/gNMI only; there is no Redfish service to ask.
+                Check {
+                    scenario: "switch host does not",
+                    input: Some(EndpointMetadata::Switch(switch_host)),
+                    expect: false,
+                },
+                // Unlike periodic log collection, which power shelves opt out
+                // of, identity resolution covers them -- the taxonomy names
+                // both shelf vendors and only the chassis identifies them.
+                Check {
+                    scenario: "power shelf speaks Redfish",
+                    input: Some(EndpointMetadata::PowerShelf(PowerShelfData {
+                        id: None,
+                        serial: "power-shelf".to_string(),
+                    })),
+                    expect: true,
+                },
+                Check {
+                    scenario: "an endpoint without metadata is assumed to",
+                    input: None,
+                    expect: true,
+                },
+            ],
+            |metadata| {
+                let mut endpoint = test_endpoint(mac("00:11:22:33:44:55"));
+                endpoint.metadata = metadata;
+
+                endpoint.supports_redfish()
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_platform_caches_an_empty_result_across_clones() {
+        let state = SharedPlatform::default();
+        let clone = state.clone();
+        let query_count = AtomicUsize::new(0);
+
+        for state in [&state, &clone] {
+            state
+                .get_or_try_init(|| async {
+                    query_count.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, Infallible>(BmcPlatform::default())
+                })
+                .await
+                .expect("infallible platform initialization");
+        }
+
+        // A BMC that identified nothing is still an answer; asking again every
+        // discovery pass would spend requests to re-learn it.
+        assert_eq!(query_count.load(Ordering::SeqCst), 1);
+        assert!(state.initialized());
+        assert!(state.get().is_some_and(BmcPlatform::is_empty));
+        assert!(clone.get().is_some_and(BmcPlatform::is_empty));
     }
 
     #[tokio::test]

@@ -288,6 +288,7 @@ mod tests {
     /// Builds a base log context without endpoint metadata.
     fn test_context() -> EventContext {
         EventContext {
+            platform: Default::default(),
             endpoint_key: "aa:bb:cc:dd:ee:ff".to_string(),
             addr: BmcAddr {
                 ip: "10.0.0.1".parse().expect("valid ip"),
@@ -304,6 +305,7 @@ mod tests {
     /// Builds a log context with representative machine metadata.
     fn machine_context() -> EventContext {
         EventContext {
+            platform: Default::default(),
             labels: std::collections::BTreeMap::from([(
                 "site".to_string(),
                 "rno-dev7".to_string(),

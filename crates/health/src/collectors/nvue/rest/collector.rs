@@ -1367,6 +1367,7 @@ mod tests {
         .expect("rest client builds");
 
         let event_context = EventContext {
+            platform: Default::default(),
             endpoint_key: "test-switch".to_string(),
             addr: addr.clone(),
             collector_type: COLLECTOR_NAME,

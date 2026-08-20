@@ -840,6 +840,7 @@ dependencies = [
  "carbide-api-model",
  "carbide-network",
  "carbide-test-support",
+ "hw-platform",
  "itertools 0.14.0",
  "lazy_static",
  "mac_address",
@@ -2092,6 +2093,7 @@ dependencies = [
  "http-body-util",
  "humantime",
  "humantime-serde",
+ "hw-platform",
  "hyper",
  "hyper-rustls",
  "hyper-util",
@@ -6023,6 +6025,14 @@ checksum = "57a3db5ea5923d99402c94e9feb261dc5ee9b4efa158b0315f788cf549cc200c"
 dependencies = [
  "humantime",
  "serde",
+]
+
+[[package]]
+name = "hw-platform"
+version = "0.1.0"
+dependencies = [
+ "bmc-vendor",
+ "carbide-test-support",
 ]
 
 [[package]]

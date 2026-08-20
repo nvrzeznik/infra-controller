@@ -414,71 +414,24 @@ async fn build_delta_powershelf_report<B: Bmc>(
     })
 }
 
+/// Projects this crate's exploration types onto the plain identity fields the
+/// shared classifier reads. The rules themselves live in `hw-platform` so
+/// `carbide-health` resolves the same platform from a `ServiceRoot`, a
+/// `ComputerSystem`, and a `Chassis` collection without depending on this crate.
 pub(crate) fn hw_type<B: Bmc>(
     root: &nv_redfish::ServiceRoot<B>,
     explored_system: &ExploredComputerSystem<B>,
     explored_chassis: &ExploredChassisCollection<B>,
 ) -> Option<hw::HwType> {
-    let system = &explored_system.system;
-    let oem_id = root.oem_id().map(|v| v.into_inner());
-
-    // GB300 is an NVIDIA HGX platform identity, recognized by the NVIDIA "NVIDIA GB300"
-    // GPU chassis (`is_gb300()`) independent of the host BMC vendor. Resolve it before the
-    // host-vendor match below so platform classification is not gated on the host ODM; the
-    // ODM only selects the ODM-specific variant.
-    if explored_chassis.is_gb300() {
-        // Lenovo GB300: AMI host BMC + Lenovo host chassis.
-        if explored_chassis.is_lenovo() {
-            return Some(hw::HwType::LenovoGb300);
-        }
-        // DGX GB300: NVIDIA "GB BMC" host (same BMC family as GB200). Resolved here, ahead of
-        // the GB200 arm below, since it shares GB200's ServiceRoot signature -- the GB300 GPU
-        // chassis (`is_gb300()`) is what distinguishes it from a real GB200.
-        if root.vendor() == Some(Vendor::new("NVIDIA"))
-            && root.product() == Some(Product::new("GB BMC"))
-        {
-            return Some(hw::HwType::DgxGb300);
-        }
-        // SMC GB300: Supermicro OpenBMC host.
-        if root.vendor() == Some(Vendor::new("Supermicro")) {
-            return Some(hw::HwType::SupermicroGb300);
-        }
-    }
-
-    root.vendor()
-        .map(|v| v.into_inner())
-        .or_else(|| (oem_id == Some("Supermicro")).then_some("Supermicro"))
-        .and_then(|vendor_id| match vendor_id {
-            "AMI" if system.id().into_inner() == "DGX" => Some(hw::HwType::Viking),
-            "AMI" => Some(hw::HwType::Ami),
-            "Dell" => Some(hw::HwType::Dell),
-            "Lenovo" if oem_id == Some("Ami") => Some(hw::HwType::LenovoAmi),
-            "Lenovo" if oem_id != Some("Ami") => Some(hw::HwType::Lenovo),
-            "Supermicro" => Some(hw::HwType::Supermicro),
-            "HPE" => Some(hw::HwType::Hpe),
-            "Nvidia" if is_bluefield_system_id(system.id()) => Some(hw::HwType::Bluefield),
-            "NVIDIA" if root.product() == Some(Product::new("VR NVL72")) => {
-                Some(hw::HwType::VeraRubin)
-            }
-            "WIWYNN" | "NVIDIA"
-                if root.product() == Some(Product::new("GB200 NVL"))
-                    || root.product() == Some(Product::new("GB BMC")) =>
-            {
-                Some(hw::HwType::Gb200)
-            }
-            "NVIDIA" if root.product() == Some(Product::new("P3809")) => Some(hw::HwType::NvSwitch),
-            _ => None,
-        })
-        .or_else(|| {
-            explored_chassis
-                .is_liteon_powershelf()
-                .then_some(hw::HwType::LiteonPowerShelf)
-        })
-        .or_else(|| {
-            explored_chassis
-                .is_delta_powershelf()
-                .then_some(hw::HwType::DeltaPowerShelf)
-        })
+    hw_platform::classify(
+        hw_platform::ServiceIdentity {
+            vendor: root.vendor().map(|v| v.into_inner()),
+            product: root.product().map(|v| v.into_inner()),
+            oem_id: root.oem_id().map(|v| v.into_inner()),
+            system_id: Some(explored_system.system.id().into_inner()),
+        },
+        &explored_chassis.identities(),
+    )
 }
 
 fn lockdown_status<B: Bmc>(
