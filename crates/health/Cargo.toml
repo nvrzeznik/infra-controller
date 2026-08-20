@@ -29,6 +29,7 @@ path = "src/main.rs"
 
 [dependencies]
 carbide-instrument = { path = "../instrument" }
+hw-platform = { path = "../hw-platform" }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }

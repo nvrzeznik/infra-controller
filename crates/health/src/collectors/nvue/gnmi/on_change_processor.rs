@@ -374,6 +374,7 @@ mod tests {
 
     fn test_event_context(collector_type: &'static str) -> EventContext {
         EventContext {
+            platform: Default::default(),
             endpoint_key: "aa:bb:cc:dd:ee:ff".to_string(),
             addr: BmcAddr {
                 ip: "10.0.0.1".parse().unwrap(),
@@ -773,6 +774,7 @@ mod tests {
             stream_metrics,
             Some(sink.clone()),
             EventContext {
+                platform: Default::default(),
                 endpoint_key: "aa:bb:cc:dd:ee:ff".to_string(),
                 addr: BmcAddr {
                     ip: "10.0.0.1".parse().unwrap(),

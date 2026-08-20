@@ -152,6 +152,7 @@ mod tests {
 
     fn context() -> EventContext {
         EventContext {
+            platform: Default::default(),
             endpoint_key: "42:9e:b1:bd:9d:dd".to_string(),
             addr: BmcAddr {
                 ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),

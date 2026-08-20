@@ -21,8 +21,8 @@ mod sources;
 
 pub use cluster::ClusterEndpointSource;
 pub use model::{
-    BmcAddr, BmcCredentials, BmcEndpoint, EndpointMetadata, EndpointSource, MachineData,
-    PowerShelfData, SharedSystemUuid, SwitchData, SwitchEndpointRole,
+    BmcAddr, BmcCredentials, BmcEndpoint, BmcPlatform, EndpointMetadata, EndpointSource,
+    MachineData, PowerShelfData, SharedPlatform, SharedSystemUuid, SwitchData, SwitchEndpointRole,
 };
 pub use sources::{CompositeEndpointSource, StaticEndpointSource};
 
@@ -66,6 +66,7 @@ pub(crate) mod test_support {
             .expect("fixed-credential BmcClient construction is infallible"),
         );
         BmcEndpoint {
+            platform: Default::default(),
             addr,
             metadata,
             rack_id,

@@ -88,6 +88,7 @@ impl EventProcessor for ReemitProcessor {
 
 fn event_context() -> EventContext {
     EventContext {
+        platform: Default::default(),
         endpoint_key: "42:9e:b1:bd:9d:dd".to_string(),
         addr: BmcAddr {
             ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
@@ -268,6 +269,7 @@ fn rack_event_contexts(rack_id: &str, tray_count: usize) -> Vec<EventContext> {
         .map(|idx| {
             let mac = format!("42:9e:b1:bd:{:02x}:{:02x}", idx / 256, idx % 256);
             EventContext {
+                platform: Default::default(),
                 endpoint_key: mac.clone(),
                 addr: BmcAddr {
                     ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, (idx + 1) as u8)),

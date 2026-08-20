@@ -276,6 +276,7 @@ mod tests {
     #[test]
     fn test_stream_static_labels_includes_machine_metadata() {
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "42:9e:b1:bd:9d:dd".to_string(),
             addr: BmcAddr {
                 ip: "10.0.0.1".parse().expect("valid ip"),
@@ -333,6 +334,7 @@ mod tests {
         let nvlink_domain_uuid_label = nvlink_domain_uuid.to_string();
 
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "11:22:33:44:55:66".to_string(),
             addr: BmcAddr {
                 ip: "10.0.1.1".parse().expect("valid ip"),

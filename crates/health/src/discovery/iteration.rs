@@ -27,7 +27,7 @@ use super::cleanup::{
     stop_ineligible_nmxc_collectors, stop_removed_bmc_collectors, stop_stale_switch_collectors,
 };
 use super::context::{CollectorKind, DiscoveryLoopContext};
-use super::identity::ensure_primary_system_uuid;
+use super::identity::ensure_endpoint_identity;
 use super::reachability::reconcile_reachability_collectors;
 use super::spawn::{spawn_collectors_for_endpoint, switch_supports_nmxc_subscription};
 use crate::HealthError;
@@ -90,17 +90,18 @@ pub async fn run_discovery_iteration(
         .cloned()
         .collect();
 
-    // Resolve machine identity before collectors start when possible. Shared
+    // Resolve endpoint identity before collectors start when possible. Shared
     // write-once state propagates the result to running collectors and caches
-    // both present and absent UUIDs, preventing repeated successful BMC queries.
+    // both present and absent results, preventing repeated successful BMC
+    // queries.
     let identity_concurrency = ctx.discovery_config.discovery_concurrency.max(1);
     stream::iter(sharded_endpoints.iter().cloned())
         .map(|endpoint| async move {
-            if let Err(error) = ensure_primary_system_uuid(&endpoint).await {
+            if let Err(error) = ensure_endpoint_identity(&endpoint).await {
                 tracing::warn!(
                     ?error,
                     bmc_address = ?endpoint.addr,
-                    "Could not resolve primary ComputerSystem UUID; continuing without it"
+                    "Could not resolve endpoint identity; continuing without it"
                 );
             }
         })
