@@ -33,7 +33,7 @@ use crate::bmc::{
 use crate::config::{StaticBmcEndpoint, StaticSwitchEndpointRole};
 use crate::endpoint::{
     BmcAddr, BmcCredentials, BmcEndpoint, BoxFuture, EndpointMetadata, EndpointSource, MachineData,
-    PowerShelfData, SharedSystemUuid, SwitchData, SwitchEndpointRole,
+    PowerShelfData, SharedPlatform, SharedSystemUuid, SwitchData, SwitchEndpointRole,
 };
 use crate::metrics::BmcLatencyMetrics;
 
@@ -242,6 +242,7 @@ impl StaticEndpointSource {
                 rack_id,
                 labels: cfg.labels.clone(),
                 bmc,
+                platform: SharedPlatform::default(),
             };
             endpoints.push(Arc::new(endpoint));
         }

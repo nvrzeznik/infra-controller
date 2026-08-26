@@ -174,6 +174,7 @@ mod tests {
 
     fn context_with_rack(mac: &str, rack: &str) -> EventContext {
         EventContext {
+            platform: Default::default(),
             endpoint_key: mac.to_string(),
             addr: BmcAddr {
                 ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
@@ -189,6 +190,7 @@ mod tests {
 
     fn context_without_rack(mac: &str) -> EventContext {
         EventContext {
+            platform: Default::default(),
             endpoint_key: mac.to_string(),
             addr: BmcAddr {
                 ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),

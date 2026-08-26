@@ -1392,6 +1392,7 @@ mod tests {
             .expect("constructor succeeds"),
         );
         let endpoint = Arc::new(BmcEndpoint {
+            platform: Default::default(),
             addr,
             metadata: Some(switch_metadata_with_role(
                 SwitchEndpointRole::Host,

@@ -344,10 +344,13 @@ impl StaticBmcEndpoint {
         }
 
         const RESERVED_LABELS: &[&str] = &[
+            "bmc_product",
+            "bmc_vendor",
             "collector_type",
             "endpoint_ip",
             "endpoint_key",
             "endpoint_mac",
+            "hw_platform",
             "machine_id",
             "machine_slot_number",
             "machine_tray_index",
@@ -4849,7 +4852,16 @@ machine = { id = "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0", 
 
     #[test]
     fn test_static_endpoint_rejects_invalid_or_reserved_label_names() {
-        for (name, expected) in [("bad-label", "must match"), ("system_uuid", "is reserved")] {
+        // Reserved names are the ones health derives itself. A custom label
+        // sharing one would silently overwrite discovered identity in the
+        // exported attributes, so it is refused at config load instead.
+        for (name, expected) in [
+            ("bad-label", "must match"),
+            ("system_uuid", "is reserved"),
+            ("hw_platform", "is reserved"),
+            ("bmc_vendor", "is reserved"),
+            ("bmc_product", "is reserved"),
+        ] {
             let toml_content = format!(
                 r#"
 [endpoint_sources.nico_api]

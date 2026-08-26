@@ -32,7 +32,9 @@ use crate::bmc::{
     BmcClient, BmcLatencyInstrumentation, FixedCredentialProvider, bmc_latency_endpoint_labels,
 };
 use crate::config::ClusterEndpointSourceConfig;
-use crate::endpoint::{BmcAddr, BmcCredentials, BmcEndpoint, BoxFuture, EndpointSource};
+use crate::endpoint::{
+    BmcAddr, BmcCredentials, BmcEndpoint, BoxFuture, EndpointSource, SharedPlatform,
+};
 use crate::metrics::BmcLatencyMetrics;
 
 // ── Inventory file shape ──────────────────────────────────────────────────────
@@ -484,6 +486,7 @@ fn build_endpoints(
             rack_id,
             labels: Default::default(),
             bmc,
+            platform: SharedPlatform::default(),
         }));
     }
     endpoints

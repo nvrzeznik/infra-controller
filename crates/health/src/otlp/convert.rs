@@ -109,6 +109,25 @@ fn resource_attributes(context: &EventContext) -> Vec<KeyValue> {
     if let Some(driver_version) = context.driver_version() {
         attrs.push(KeyValue::new("driver.version", driver_version.to_string()));
     }
+    // Hardware platform. Bare Redfish events are the reason this is here --
+    // their message registry keys and vendor fault identifiers only mean
+    // something against a platform -- but it rides on the resource, so it also
+    // becomes a join key for every other signal from this endpoint.
+    //
+    // Each is omitted when unresolved rather than sent as "unknown": an absent
+    // attribute says the BMC did not answer, which is a different thing from a
+    // BMC that answered with a value nothing recognized. The raw vendor and
+    // product are published beside the classification so a platform that
+    // reaches the fleet before its classifier arm does is still identifiable.
+    if let Some(hw_platform) = context.hw_platform() {
+        attrs.push(KeyValue::new("hw.platform", hw_platform.as_str()));
+    }
+    if let Some(bmc_vendor) = context.bmc_vendor() {
+        attrs.push(KeyValue::new("bmc.vendor", bmc_vendor.to_string()));
+    }
+    if let Some(bmc_product) = context.bmc_product() {
+        attrs.push(KeyValue::new("bmc.product", bmc_product.to_string()));
+    }
     if let Some(component_type) = context.component_type() {
         attrs.push(KeyValue::new("component.type", component_type.to_string()));
     }
@@ -492,12 +511,14 @@ mod tests {
     use carbide_uuid::rack::RackId;
     use carbide_uuid::switch::{SwitchId, SwitchIdSource, SwitchType};
     use chrono::{TimeZone, Utc};
+    use futures::FutureExt;
+    use hw_platform::HwType;
     use mac_address::MacAddress;
 
     use super::*;
     use crate::endpoint::{
-        BmcAddr, EndpointMetadata, MachineData, PowerShelfData, SharedSystemUuid, SwitchData,
-        SwitchEndpointRole,
+        BmcAddr, BmcPlatform, EndpointMetadata, MachineData, PowerShelfData, SharedSystemUuid,
+        SwitchData, SwitchEndpointRole,
     };
     use crate::otlp::common::{AnyValue as OtlpAnyValue, any_value};
     use crate::sink::{
@@ -507,6 +528,7 @@ mod tests {
 
     fn test_context() -> EventContext {
         EventContext {
+            platform: Default::default(),
             endpoint_key: "42:9e:b1:bd:9d:dd".to_string(),
             addr: BmcAddr {
                 ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
@@ -601,6 +623,7 @@ mod tests {
     fn resource_attributes_include_machine_metadata_when_present() {
         let domain_uuid = NvLinkDomainId::nil();
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "42:9e:b1:bd:9d:dd".to_string(),
             addr: BmcAddr {
                 ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
@@ -651,6 +674,7 @@ mod tests {
     #[test]
     fn resource_attributes_omit_absent_optional_machine_metadata() {
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "42:9e:b1:bd:9d:dd".to_string(),
             addr: BmcAddr {
                 ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
@@ -681,6 +705,72 @@ mod tests {
         assert_eq!(attr_value(&attrs, "nvlink.domain.uuid"), None);
     }
 
+    // The platform rides on the resource so it reaches every record from the
+    // endpoint. Bare Redfish events are what need it -- their registry keys and
+    // vendor fault ids only mean something against a platform -- and the
+    // downstream connector flattens resource and record attributes together, so
+    // stamping it once here is what those events read.
+    #[test]
+    fn resource_attributes_carry_the_hardware_platform_once_resolved() {
+        let context = test_context();
+        context
+            .platform
+            .get_or_try_init(|| async {
+                Ok::<_, std::convert::Infallible>(BmcPlatform {
+                    hw_type: Some(HwType::DgxGb300),
+                    vendor: Some("NVIDIA".to_string()),
+                    product: Some("GB BMC".to_string()),
+                })
+            })
+            .now_or_never()
+            .expect("initialization completes immediately")
+            .expect("infallible platform initialization");
+
+        let attrs = otlp_resource_attributes(&context);
+
+        assert_eq!(attr_value(&attrs, "hw.platform"), Some("dgx_gb300"));
+        assert_eq!(attr_value(&attrs, "bmc.vendor"), Some("NVIDIA"));
+        assert_eq!(attr_value(&attrs, "bmc.product"), Some("GB BMC"));
+    }
+
+    // Absent, not "unknown". An absent attribute says the BMC was not asked or
+    // did not answer; a literal "unknown" would be indistinguishable from a
+    // platform that answered with something nothing recognized, and the two
+    // call for different follow-up.
+    #[test]
+    fn resource_attributes_omit_the_platform_until_it_resolves() {
+        let attrs = otlp_resource_attributes(&test_context());
+
+        assert_eq!(attr_value(&attrs, "hw.platform"), None);
+        assert_eq!(attr_value(&attrs, "bmc.vendor"), None);
+        assert_eq!(attr_value(&attrs, "bmc.product"), None);
+    }
+
+    // A platform that reaches the fleet before its classifier arm still has to
+    // be identifiable, or it is indistinguishable from an unreachable BMC.
+    #[test]
+    fn resource_attributes_publish_raw_identity_for_an_unclassified_platform() {
+        let context = test_context();
+        context
+            .platform
+            .get_or_try_init(|| async {
+                Ok::<_, std::convert::Infallible>(BmcPlatform {
+                    hw_type: None,
+                    vendor: Some("Acme".to_string()),
+                    product: Some("Anvil 9000".to_string()),
+                })
+            })
+            .now_or_never()
+            .expect("initialization completes immediately")
+            .expect("infallible platform initialization");
+
+        let attrs = otlp_resource_attributes(&context);
+
+        assert_eq!(attr_value(&attrs, "hw.platform"), None);
+        assert_eq!(attr_value(&attrs, "bmc.vendor"), Some("Acme"));
+        assert_eq!(attr_value(&attrs, "bmc.product"), Some("Anvil 9000"));
+    }
+
     #[test]
     fn resource_attributes_include_switch_placement_metadata_when_present() {
         let switch_id = test_switch_id("switch-a");
@@ -689,6 +779,7 @@ mod tests {
         let nvlink_domain_uuid_attr = nvlink_domain_uuid.to_string();
 
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "11:22:33:44:55:66".to_string(),
             addr: BmcAddr {
                 ip: IpAddr::V4(Ipv4Addr::new(10, 0, 1, 1)),
@@ -733,6 +824,7 @@ mod tests {
         let switch_id = test_switch_id("switch-host");
         let switch_id_attr = switch_id.to_string();
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "11:22:33:44:55:66".to_string(),
             addr: BmcAddr {
                 ip: IpAddr::V4(Ipv4Addr::new(10, 0, 1, 1)),
@@ -789,6 +881,7 @@ mod tests {
         let nvlink_domain_uuid = NvLinkDomainId::new();
         let nvlink_domain_uuid_attr = nvlink_domain_uuid.to_string();
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "22:33:44:55:66:77".to_string(),
             addr: BmcAddr {
                 ip: IpAddr::V4(Ipv4Addr::new(10, 0, 2, 1)),
@@ -852,6 +945,7 @@ mod tests {
     #[test]
     fn switch_bmc_log_resource_omits_unavailable_optional_metadata() {
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "33:44:55:66:77:88".to_string(),
             addr: BmcAddr {
                 ip: IpAddr::V4(Ipv4Addr::new(10, 0, 2, 2)),
@@ -909,6 +1003,7 @@ mod tests {
             PowerShelfId::from_str("ps100ht038bg3qsho433vkg684heguv282qaggmrsh2ugn1qk096n2c6hcg")
                 .expect("valid power shelf id");
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "33:44:55:66:77:88".to_string(),
             addr: BmcAddr {
                 ip: IpAddr::V4(Ipv4Addr::new(10, 0, 3, 1)),
@@ -1412,6 +1507,7 @@ mod tests {
     #[test]
     fn events_grouped_by_endpoint() {
         let ctx1 = EventContext {
+            platform: Default::default(),
             endpoint_key: "endpoint-a".to_string(),
             addr: BmcAddr {
                 ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
@@ -1424,6 +1520,7 @@ mod tests {
             labels: Default::default(),
         };
         let ctx2 = EventContext {
+            platform: Default::default(),
             endpoint_key: "endpoint-b".to_string(),
             ..ctx1.clone()
         };
@@ -1457,10 +1554,12 @@ mod tests {
     fn metric_resources_are_grouped_by_endpoint_and_collector() {
         let base_ctx = test_context();
         let rest_ctx = EventContext {
+            platform: Default::default(),
             collector_type: "nvue_rest",
             ..base_ctx.clone()
         };
         let gnmi_ctx = EventContext {
+            platform: Default::default(),
             collector_type: "nvue_gnmi",
             ..base_ctx
         };
@@ -1523,6 +1622,7 @@ mod tests {
         let switch_id = test_switch_id("switch-nmxt");
         let switch_id_attr = switch_id.to_string();
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "11:22:33:44:55:66".to_string(),
             addr: BmcAddr {
                 ip: IpAddr::V4(Ipv4Addr::new(10, 0, 1, 1)),

@@ -31,6 +31,7 @@ path = "tests/integration/main.rs"
 # [local-dependencies]
 # DO NOT PUT DEPENDENCIES OTHER THAN LOCAL DEPS HERE, THEY SHOULD ALL HAVE 'path =' IN THEM.
 bmc-vendor = { path = "../bmc-vendor" }
+hw-platform = { path = "../hw-platform" }
 bmc-mock = { path = "../bmc-mock", optional = true }
 carbide-network = { path = "../network", default-features = false }
 carbide-api-model = { path = "../api-model", default-features = false }

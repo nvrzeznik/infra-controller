@@ -28,10 +28,13 @@ use health_report::{
     HealthAlertClassification, HealthProbeAlert, HealthProbeId, HealthProbeSuccess,
     HealthReport as CarbideHealthReport, HealthReportConversionError,
 };
+use hw_platform::HwType;
 use nv_redfish::resource::Health as BmcHealth;
 use serde::Serialize;
 
-use crate::endpoint::{BmcAddr, BmcEndpoint, EndpointMetadata, MachineData, SwitchEndpointRole};
+use crate::endpoint::{
+    BmcAddr, BmcEndpoint, EndpointMetadata, MachineData, SharedPlatform, SwitchEndpointRole,
+};
 use crate::metrics::MetricLabel;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, carbide_instrument::LabelValue)]
@@ -61,6 +64,10 @@ pub struct EventContext {
     pub metadata: Option<EndpointMetadata>,
     pub rack_id: Option<RackId>,
     pub labels: BTreeMap<String, String>,
+
+    /// Shared with the endpoint, not copied out of it, so a platform resolved
+    /// after this context was cloned still reaches the events it stamps.
+    pub platform: SharedPlatform,
 }
 
 impl EventContext {
@@ -72,6 +79,7 @@ impl EventContext {
             metadata: endpoint.metadata.clone(),
             rack_id: endpoint.rack_id.clone(),
             labels: endpoint.labels.clone(),
+            platform: endpoint.platform.clone(),
         }
     }
 
@@ -114,6 +122,25 @@ impl EventContext {
     pub fn driver_version(&self) -> Option<&str> {
         self.machine_metadata()
             .and_then(|machine| machine.driver_version.as_deref())
+    }
+
+    /// Returns the classified hardware platform once discovery has resolved it.
+    pub fn hw_platform(&self) -> Option<HwType> {
+        self.platform.get().and_then(|platform| platform.hw_type)
+    }
+
+    /// Returns the BMC's reported `ServiceRoot.Vendor`.
+    pub fn bmc_vendor(&self) -> Option<&str> {
+        self.platform
+            .get()
+            .and_then(|platform| platform.vendor.as_deref())
+    }
+
+    /// Returns the BMC's reported `ServiceRoot.Product`.
+    pub fn bmc_product(&self) -> Option<&str> {
+        self.platform
+            .get()
+            .and_then(|platform| platform.product.as_deref())
     }
 
     /// Returns the PHR component category for endpoints with typed metadata.
@@ -616,7 +643,7 @@ mod tests {
     use mac_address::MacAddress;
 
     use super::*;
-    use crate::endpoint::{MachineData, PowerShelfData, SharedSystemUuid, SwitchData};
+    use crate::endpoint::{BmcPlatform, MachineData, PowerShelfData, SharedSystemUuid, SwitchData};
 
     #[derive(Clone, Copy)]
     enum ContextKind {
@@ -750,6 +777,7 @@ mod tests {
         };
 
         EventContext {
+            platform: Default::default(),
             endpoint_key: "00:11:22:33:44:55".to_string(),
             addr: addr(),
             collector_type: "unit-test",
@@ -776,6 +804,55 @@ mod tests {
             .expect("infallible UUID initialization");
 
         assert_eq!(collector_context.system_uuid(), Some(expected));
+    }
+
+    // The whole reason the platform is shared rather than copied. A streaming
+    // collector builds its context once at startup and keeps it for the life of
+    // the stream, so a platform discovery resolves afterwards reaches emitted
+    // events only through this.
+    #[tokio::test]
+    async fn cloned_event_context_observes_later_platform_resolution() {
+        let context = context(ContextKind::Machine);
+        let collector_context = context.clone();
+
+        assert_eq!(collector_context.hw_platform(), None);
+        assert_eq!(collector_context.bmc_vendor(), None);
+        assert_eq!(collector_context.bmc_product(), None);
+
+        context
+            .platform
+            .get_or_try_init(|| async {
+                Ok::<_, std::convert::Infallible>(BmcPlatform {
+                    hw_type: Some(HwType::DgxGb300),
+                    vendor: Some("NVIDIA".to_string()),
+                    product: Some("GB BMC".to_string()),
+                })
+            })
+            .await
+            .expect("infallible platform initialization");
+
+        assert_eq!(collector_context.hw_platform(), Some(HwType::DgxGb300));
+        assert_eq!(collector_context.bmc_vendor(), Some("NVIDIA"));
+        assert_eq!(collector_context.bmc_product(), Some("GB BMC"));
+    }
+
+    // A BMC that answered and identified nothing is not the same as a BMC that
+    // was never asked, but both publish nothing -- so the accessors have to read
+    // the same either way.
+    #[tokio::test]
+    async fn a_resolved_but_empty_platform_reads_as_absent() {
+        let context = context(ContextKind::Switch);
+
+        context
+            .platform
+            .get_or_try_init(|| async { Ok::<_, std::convert::Infallible>(BmcPlatform::default()) })
+            .await
+            .expect("infallible platform initialization");
+
+        assert!(context.platform.get().is_some_and(BmcPlatform::is_empty));
+        assert_eq!(context.hw_platform(), None);
+        assert_eq!(context.bmc_vendor(), None);
+        assert_eq!(context.bmc_product(), None);
     }
 
     fn summarize_context(context: EventContext) -> ContextSummary {

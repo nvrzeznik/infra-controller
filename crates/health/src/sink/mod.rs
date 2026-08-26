@@ -206,6 +206,7 @@ mod tests {
             CompositeDataSink::new(vec![sink_ok_1, sink_noop, sink_ok_2], metrics_manager);
 
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "42:9e:b1:bd:9d:dd".to_string(),
             addr: BmcAddr {
                 ip: "10.0.0.1".parse().expect("valid ip"),
@@ -255,6 +256,7 @@ mod tests {
         );
 
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "42:9e:b1:bd:9d:dd".to_string(),
             addr: BmcAddr {
                 ip: "10.0.0.1".parse().expect("valid ip"),
@@ -357,6 +359,7 @@ mod tests {
             .expect("sink should initialize");
 
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "42:9e:b1:bd:9d:dd".to_string(),
             addr: BmcAddr {
                 ip: "10.0.0.1".parse().expect("valid ip"),
@@ -438,6 +441,7 @@ mod tests {
             .expect("sink should initialize");
 
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "42:9e:b1:bd:9d:dd".to_string(),
             addr: BmcAddr {
                 ip: "10.0.0.1".parse().expect("valid ip"),
@@ -498,6 +502,7 @@ mod tests {
             .expect("sink should initialize");
 
         let context = EventContext {
+            platform: Default::default(),
             endpoint_key: "42:9e:b1:bd:9d:dd".to_string(),
             addr: BmcAddr {
                 ip: "10.0.0.1".parse().expect("valid ip"),

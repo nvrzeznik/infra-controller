@@ -44,7 +44,7 @@ use crate::bmc::{
 };
 use crate::endpoint::{
     BmcAddr, BmcCredentials, BmcEndpoint, EndpointMetadata, EndpointSource, MachineData,
-    PowerShelfData, SharedSystemUuid, SwitchData, SwitchEndpointRole,
+    PowerShelfData, SharedPlatform, SharedSystemUuid, SwitchData, SwitchEndpointRole,
 };
 use crate::metrics::BmcLatencyMetrics;
 
@@ -306,6 +306,7 @@ struct CachedBmcClient {
     client: Arc<BmcClient>,
     kind: ApiCredentialKind,
     system_uuid: SharedSystemUuid,
+    platform: SharedPlatform,
 }
 
 impl ApiEndpointSource {
@@ -657,6 +658,7 @@ impl ApiEndpointSource {
             rack_id,
             labels: Default::default(),
             bmc: cached.client,
+            platform: cached.platform,
         }))
     }
 }
@@ -685,6 +687,7 @@ fn cache_or_create_bmc_client(
         client,
         kind: credential_kind,
         system_uuid: SharedSystemUuid::default(),
+        platform: SharedPlatform::default(),
     };
     cache.insert(mac, cached.clone());
     Ok(cached)

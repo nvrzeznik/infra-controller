@@ -368,6 +368,7 @@ mod tests {
 
     fn test_context() -> EventContext {
         EventContext {
+            platform: Default::default(),
             endpoint_key: "10.85.14.144".to_string(),
             addr: crate::endpoint::BmcAddr {
                 ip: "10.85.14.144".parse().unwrap(),
@@ -569,10 +570,12 @@ mod tests {
     fn metric_events_with_same_sample_identity_but_different_collector_are_separate_entries() {
         let sink = test_sink();
         let rest_ctx = EventContext {
+            platform: Default::default(),
             collector_type: "nvue_rest",
             ..test_context()
         };
         let gnmi_ctx = EventContext {
+            platform: Default::default(),
             collector_type: "nvue_gnmi",
             ..test_context()
         };

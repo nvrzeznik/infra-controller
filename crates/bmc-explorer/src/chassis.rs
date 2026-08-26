@@ -109,16 +109,19 @@ impl<B: Bmc> ExploredChassisCollection<B> {
         }
     }
 
-    pub(crate) fn is_liteon_powershelf(&self) -> bool {
-        self.members.iter().any(|m| {
-            m.chassis.id().into_inner() == "powershelf"
-                || (m.chassis.id().into_inner() == "chassis"
-                    && m.chassis
-                        .hardware_id()
-                        .manufacturer
-                        .as_ref()
-                        .is_some_and(|mfg| mfg.as_ref().to_lowercase().contains("lite-on")))
-        })
+    /// Projects the members onto the identity fields `hw_platform` classifies on.
+    pub(crate) fn identities(&self) -> Vec<hw_platform::ChassisIdentity<'_>> {
+        self.members
+            .iter()
+            .map(|m| {
+                let hardware_id = m.chassis.hardware_id();
+                hw_platform::ChassisIdentity {
+                    id: m.chassis.id().into_inner(),
+                    manufacturer: hardware_id.manufacturer.map(|v| v.into_inner()),
+                    model: hardware_id.model.map(|v| v.into_inner()),
+                }
+            })
+            .collect()
     }
 
     pub(crate) fn liteon_power_state(&self) -> Option<LiteOnSuppliesState<'_>> {
@@ -129,23 +132,13 @@ impl<B: Bmc> ExploredChassisCollection<B> {
         })
     }
 
-    /// Detects a Delta power shelf. Delta BMCs expose neither a `Vendor` in the
-    /// service root nor a `/redfish/v1/Systems` collection, so classification
-    /// relies on a Delta manufacturer on the power-shelf chassis (id "chassis"
-    /// or "powershelf"). The manufacturer gate is what distinguishes Delta from
-    /// the Lite-On power shelf, which shares the generic "powershelf" chassis
-    /// id.
+    /// Detects a Delta power shelf; see [`hw_platform::is_delta_powershelf`].
+    ///
+    /// Delta detection is needed before classification runs -- it selects the
+    /// exploration path for a BMC that exposes no `Systems` collection -- so it
+    /// is reachable on its own as well as through `hw_platform::classify`.
     pub(crate) fn is_delta_powershelf(&self) -> bool {
-        self.members.iter().any(|m| {
-            is_delta_powershelf_chassis(
-                m.chassis.id().into_inner(),
-                m.chassis
-                    .hardware_id()
-                    .manufacturer
-                    .as_ref()
-                    .map(|mfg| **mfg),
-            )
-        })
+        hw_platform::is_delta_powershelf(&self.identities())
     }
 
     /// Aggregate power state across all Delta PSUs found on the chassis members.
@@ -210,13 +203,6 @@ impl<B: Bmc> ExploredChassisCollection<B> {
         }
     }
 
-    pub(crate) fn is_gb300(&self) -> bool {
-        self.members.iter().any(|m| {
-            m.chassis.hardware_id().manufacturer == Some(Manufacturer::new("NVIDIA"))
-                && m.chassis.hardware_id().model == Some(Model::new("NVIDIA GB300"))
-        })
-    }
-
     pub(crate) fn is_mgx_c2(&self) -> bool {
         self.members.iter().any(|m| {
             let hardware_id = m.chassis.hardware_id();
@@ -226,12 +212,6 @@ impl<B: Bmc> ExploredChassisCollection<B> {
                 hardware_id.part_number.map(|v| v.into_inner()),
             )
         })
-    }
-
-    pub(crate) fn is_lenovo(&self) -> bool {
-        self.members
-            .iter()
-            .any(|m| m.chassis.hardware_id().manufacturer == Some(Manufacturer::new("Lenovo")))
     }
 
     pub(crate) fn is_bluefield2(&self) -> bool {
@@ -503,16 +483,6 @@ fn delta_psu_power_on<B: Bmc>(ps: &NvPowerSupply<B>) -> Option<bool> {
     }
 }
 
-/// Delta power-shelf identity gate: a power-shelf chassis (id `chassis` or
-/// `powershelf`) whose manufacturer identifies as Delta. This is what
-/// distinguishes a Delta shelf from the Lite-On shelf, which shares the generic
-/// `powershelf` chassis id but reports a different manufacturer. Split out so
-/// the gate can be exercised in unit tests without a live BMC.
-fn is_delta_powershelf_chassis(chassis_id: &str, manufacturer: Option<&str>) -> bool {
-    (chassis_id == "chassis" || chassis_id == "powershelf")
-        && manufacturer.is_some_and(|mfg| mfg.to_lowercase().contains("delta"))
-}
-
 fn is_mgx_c2_processor_module(
     manufacturer: Option<&str>,
     model: Option<&str>,
@@ -577,10 +547,7 @@ impl LiteOnSuppliesState<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ModelPowerState, is_delta_powershelf_chassis, is_mgx_c2_processor_module,
-        powershelf_power_state,
-    };
+    use super::{ModelPowerState, is_mgx_c2_processor_module, powershelf_power_state};
 
     #[test]
     fn identifies_mgx_c2_processor_modules() {
@@ -614,36 +581,6 @@ mod tests {
                 is_mgx_c2_processor_module(manufacturer, model, part_number),
                 expected,
                 "{case}",
-            );
-        }
-    }
-
-    // is_delta_powershelf_chassis gates Delta detection: a power-shelf chassis
-    // id ("chassis"/"powershelf") AND a Delta manufacturer. The manufacturer
-    // check is case-insensitive and substring-based, and is what separates a
-    // Delta shelf from a Lite-On shelf sharing the "powershelf" chassis id.
-    #[test]
-    fn is_delta_powershelf_chassis_gates_on_id_and_manufacturer() {
-        let cases: [(&str, Option<&str>, bool); 9] = [
-            // Delta manufacturer on either accepted power-shelf chassis id.
-            ("chassis", Some("DELTA"), true),
-            ("powershelf", Some("Delta"), true),
-            // Case-insensitive, substring match on the manufacturer.
-            ("chassis", Some("delta electronics"), true),
-            ("powershelf", Some("Delta Energy Systems"), true),
-            // Right manufacturer but a non-power-shelf chassis id is ignored.
-            ("Card1", Some("DELTA"), false),
-            ("Baseboard", Some("delta"), false),
-            // Power-shelf chassis id but a different (or missing) manufacturer.
-            ("powershelf", Some("Lite-On"), false),
-            ("chassis", Some("NVIDIA"), false),
-            ("chassis", None, false),
-        ];
-        for (id, mfg, expected) in cases {
-            assert_eq!(
-                is_delta_powershelf_chassis(id, mfg),
-                expected,
-                "id={id:?} manufacturer={mfg:?}"
             );
         }
     }

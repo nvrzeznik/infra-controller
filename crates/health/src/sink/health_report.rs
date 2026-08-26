@@ -273,6 +273,7 @@ mod tests {
 
     fn machine_context(id: MachineId) -> EventContext {
         EventContext {
+            platform: Default::default(),
             endpoint_key: "00:00:00:00:00:01".to_string(),
             addr: BmcAddr {
                 ip: "10.0.0.1".parse::<IpAddr>().unwrap(),
